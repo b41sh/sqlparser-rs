@@ -262,12 +262,12 @@ impl Default for QueryOffset {
 
 impl QueryOffset {
     /// Since sqlparser need work in non std env, we use this replace with std order
-    pub fn less_than(&self, other: &QueryOffset) -> bool {
+    pub fn less_eq_than(&self, other: &QueryOffset) -> bool {
         match (self, other) {
-            (QueryOffset::Normal(v1), QueryOffset::Normal(v2)) => v1 < v2,
+            (QueryOffset::Normal(v1), QueryOffset::Normal(v2)) => v1 <= v2,
             (QueryOffset::Normal(_), QueryOffset::EOF) => true,
             (QueryOffset::EOF, QueryOffset::Normal(_)) => false,
-            (QueryOffset::EOF, QueryOffset::EOF) => false,
+            (QueryOffset::EOF, QueryOffset::EOF) => true,
         }
     }
 }
@@ -436,6 +436,15 @@ impl<'a> Tokenizer<'a> {
                             _ => {
                                 // regular identifier starting with an "N"
                                 let s = self.tokenize_word('N', chars);
+                                let token = Token::make_word(&s, None);
+                                Self::save_position_if_necessary(
+                                    position_map,
+                                    &token,
+                                    token_idx,
+                                    chars,
+                                    pos as u64,
+                                );
+
                                 Ok(Some(Token::make_word(&s, None)))
                             }
                         }
@@ -453,6 +462,16 @@ impl<'a> Tokenizer<'a> {
                             _ => {
                                 // regular identifier starting with an "X"
                                 let s = self.tokenize_word(x, chars);
+
+                                let token = Token::make_word(&s, None);
+                                Self::save_position_if_necessary(
+                                    position_map,
+                                    &token,
+                                    token_idx,
+                                    chars,
+                                    pos as u64,
+                                );
+
                                 Ok(Some(Token::make_word(&s, None)))
                             }
                         }
@@ -461,7 +480,6 @@ impl<'a> Tokenizer<'a> {
                     ch if self.dialect.is_identifier_start(ch) => {
                         chars.next(); // consume the first char
                         let s = self.tokenize_word(ch, chars);
-
                         if s.chars().all(|x| ('0'..='9').contains(&x) || x == '.') {
                             let mut s =
                                 peeking_take_while(&mut s.char_indices().peekable(), |ch| {
@@ -541,6 +559,20 @@ impl<'a> Tokenizer<'a> {
                         // No number -> Token::Period
                         if s == "." {
                             return Ok(Some(Token::Period));
+                        }
+
+                        // match exponential notation
+                        if matches!(chars.peek(), Some((_, ch)) if ch == &'e' || ch == &'E') {
+                            s.push('e');
+                            chars.next();
+                            if matches!(chars.peek(), Some((_, ch)) if ch == &'+') {
+                                s.push('+');
+                                chars.next();
+                            } else if matches!(chars.peek(), Some((_, ch)) if ch == &'-') {
+                                s.push('-');
+                                chars.next();
+                            }
+                            s += &peeking_take_while(chars, |ch| matches!(ch, '0'..='9'));
                         }
 
                         let long = if matches!(chars.peek(), Some((_, ch)) if ch == &'L') {
@@ -917,9 +949,7 @@ impl<'a> Tokenizer<'a> {
         chars: &mut Peekable<CharIndices<'_>>,
         token_start: u64,
     ) {
-        if token == &Token::SemiColon
-            || matches!(token, Token::Word(w) if w.keyword == Keyword::VALUES || w.keyword == Keyword::ON)
-        {
+        if token == &Token::SemiColon || matches!(token, Token::Word(_)) {
             let start = QueryOffset::Normal(token_start);
             let end = chars
                 .peek()
